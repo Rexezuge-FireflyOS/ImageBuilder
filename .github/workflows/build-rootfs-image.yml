@@ -24,12 +24,10 @@ jobs:
           fetch-depth: 0
 
       - name: Install build deps
-        # 移除 parted, util-linux, rsync（在容器中不再需要）
         run: |
           pacman -Sy --noconfirm base base-devel arch-install-scripts git
 
       - name: Build rootfs directory
-        # 注意：这里我们不再需要 GPG 密钥，因为签名将在主机上进行
         run: |
           chmod +x build.sh
           ./build.sh
@@ -44,12 +42,19 @@ jobs:
           echo "NEW_TAG=$NEW_TAG" >> $GITHUB_OUTPUT
           echo "Calculated tag: $NEW_TAG"
 
-      # 关键修改：上传 ROOTFS 目录作为产物
-      - name: Upload rootfs directory artifact
+      # --- 新增步骤：将 rootfs 目录打包 ---
+      - name: Archive rootfs directory to bypass upload restrictions
+        run: |
+          # -C out/rootfs: 先切换到该目录再打包，这样压缩包里不会包含 'out/rootfs' 前缀
+          # .:      打包当前目录（即 out/rootfs）下的所有内容
+          tar -czf out/rootfs.tar.gz -C out/rootfs .
+      
+      # --- 修改步骤：上传打包后的文件 ---
+      - name: Upload rootfs archive artifact
         uses: actions/upload-artifact@v4
         with:
-          name: rootfs-directory # 修改产物名称
-          path: out/rootfs # 上传目录
+          name: rootfs-archive # 修改产物名称
+          path: out/rootfs.tar.gz # 上传 .tar.gz 文件
           retention-days: 7
 
   # ----------------------------------------------
@@ -62,84 +67,67 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Download rootfs directory artifact
+      # --- 修改步骤：下载打包后的文件 ---
+      - name: Download rootfs archive artifact
         uses: actions/download-artifact@v4
         with:
-          name: rootfs-directory
+          name: rootfs-archive # 使用新的产物名称
           path: out/
 
       - name: Install DD image tools on Host
         run: |
-          # 在 Host (ubuntu-latest) 上安装所需的工具
           sudo apt-get update
-          # parted 用于分区，e2fsprogs 用于 mkfs.ext4, rsync 用于数据复制
           sudo apt-get install -y parted e2fsprogs rsync
 
       - name: Setup GPG on Host
         run: |
-          # 重新导入 GPG 密钥以便签名最终镜像
           echo "${{ secrets.GPG_PRIVATE_KEY }}" > /tmp/gpg.key
           gpg --batch --import /tmp/gpg.key
           rm -f /tmp/gpg.key
+      
+      # --- 新增步骤：解压 rootfs 目录 ---
+      - name: Extract rootfs directory
+        run: |
+          mkdir -p out/rootfs
+          tar -xzf out/rootfs.tar.gz -C out/rootfs
 
       - name: Create DD Image on Host (using losetup, parted, mkfs)
         env:
           ROOTFS_DIR: out/rootfs
           IMAGE_FILE: out/fireflyos.img
-          IMAGE_SIZE_MB: 2048 # 2GB 镜像
+          IMAGE_SIZE_MB: 2048
           GPG_KEY: ${{ secrets.GPG_KEY }}
         run: |
           set -euo pipefail
           
-          # 1. 变量设置
           IMAGE_FILE="$IMAGE_FILE"
           ROOTFS_DIR="$ROOTFS_DIR"
           MOUNT_POINT=$(mktemp -d)
 
-          # 2. 创建一个空镜像文件
           truncate -s "${IMAGE_SIZE_MB}M" "$IMAGE_FILE"
-
-          # 3. 创建分区表 (MBR) 和一个主分区 (ext4)
           sudo parted -s "$IMAGE_FILE" mklabel msdos
-          # partprobe 帮助内核识别新创建的分区表
           sudo partx -a "$IMAGE_FILE"
-
-          # 4. 将镜像关联到 loop 设备
           LOOP_DEV=$(sudo losetup -f --show "$IMAGE_FILE")
           if [ -z "$LOOP_DEV" ]; then
               echo "错误：无法找到可用的 loop 设备。"
               exit 1
           fi
           echo "-> 镜像已关联到 $LOOP_DEV"
-          
-          # 确保分区设备节点存在
           sudo kpartx -a "$LOOP_DEV"
           PART_DEV="/dev/mapper/$(basename $LOOP_DEV)p1"
-
-          # 等待设备创建
           sleep 2
-
-          # 5. 在分区上创建 ext4 文件系统
           echo "-> 正在格式化分区 $PART_DEV..."
-          # 使用 -F 强制格式化，-L 设置卷标
           sudo mkfs.ext4 -F -L ROOTFS "$PART_DEV"
-
-          # 6. 挂载分区并复制 rootfs 内容
           echo "-> 正在挂载 $PART_DEV 到 $MOUNT_POINT..."
           sudo mount "$PART_DEV" "$MOUNT_POINT"
-
           echo "-> 正在将 rootfs 内容复制到镜像..."
-          # 确保 rsync 复制所有内容，包括隐藏文件和权限
           sudo rsync -a "$ROOTFS_DIR/" "$MOUNT_POINT/"
-
-          # 7. 卸载并清理
           echo "-> 卸载分区并分离 loop 设备..."
           sudo umount "$MOUNT_POINT"
           sudo kpartx -d "$LOOP_DEV"
           sudo losetup -d "$LOOP_DEV"
           rm -rf "$MOUNT_POINT"
           
-          # 8. 签名最终镜像
           echo "==> Signing the image..."
           gpg --detach-sign --armor --local-user "$GPG_KEY" -o "${IMAGE_FILE}.sig" "$IMAGE_FILE"
           
@@ -148,7 +136,7 @@ jobs:
       - name: Upload final DD image artifact
         uses: actions/upload-artifact@v4
         with:
-          name: final-image # 最终产物名称
+          name: final-image
           path: out/fireflyos.img
           retention-days: 7
 
@@ -157,7 +145,7 @@ jobs:
   # ----------------------------------------------
   release:
     runs-on: ubuntu-latest
-    needs: create-image # 依赖 create-image 任务
+    needs: create-image
     permissions:
       contents: write 
     steps:
@@ -169,10 +157,9 @@ jobs:
       - name: Download final image artifact
         uses: actions/download-artifact@v4
         with:
-          name: final-image # 下载最终产物
+          name: final-image
           path: out/
         
-      # ... Tagging steps (保持不变) ...
       - name: Create and Push Git Tag
         id: create_tag
         env:

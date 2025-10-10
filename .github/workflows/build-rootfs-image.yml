@@ -43,11 +43,15 @@ jobs:
       - name: Calculate release date and tag name
         id: tag_info
         run: |
+          # 获取 YYYY-MM-DD 格式的日期
           RELEASE_DATE=$(date +'%Y-%m-%d')
-          NEW_TAG="monthly-release-${RELEASE_DATE}"
+          # 获取 Unix 时间戳 (秒)
+          TIMESTAMP=$(date +%s)
+          # 新的标签名格式为 monthly-release-YYYY-MM-DD-TIMESTAMP
+          NEW_TAG="monthly-release-${RELEASE_DATE}-${TIMESTAMP}"
           echo "RELEASE_DATE=$RELEASE_DATE" >> $GITHUB_OUTPUT
           echo "NEW_TAG=$NEW_TAG" >> $GITHUB_OUTPUT
-          echo "Calculated tag: $NEW_TAG"
+          echo "Calculated tag: $NEW_TAG" # 示例: monthly-release-2025-10-10-1701388800
 
       - name: Upload rootfs artifact
         uses: actions/upload-artifact@v4

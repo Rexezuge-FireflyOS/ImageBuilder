@@ -10,20 +10,15 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: archlinux:latest
-      # The default working directory for a container job is /github/workspace.
-      # This is where GitHub Actions mounts the repository contents from the host.
-      # You DO NOT need 'options: --workdir /github/workspace' here.
-      # GitHub Actions handles the mapping.
+      # No 'options: --workdir' here, let GitHub Actions handle the default mounting.
     env:
       GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # Important for tag creation later
-          # Remove 'path: /github/workspace'.
-          # Let checkout place it in the default location on the host,
-          # which GitHub Actions then maps to /github/workspace inside the container.
-          # The repo will automatically be available at /github/workspace inside your container.
+          # No 'path:' here. Let checkout put it in the default location,
+          # which will be mounted to /github/workspace inside the container.
 
       - name: Setup GPG
         run: |
@@ -36,6 +31,8 @@ jobs:
           pacman -Sy --noconfirm base base-devel arch-install-scripts squashfs-tools git
 
       - name: Build rootfs
+        # Ensure build.sh runs from the correct directory
+        working-directory: /github/workspace # Add this for consistency if build.sh expects repo root
         env:
           GPG_KEY: ${{ secrets.GPG_KEY }}
         run: |
@@ -50,6 +47,8 @@ jobs:
 
       - name: Generate and push monthly release tag
         id: create_tag
+        # --- IMPORTANT: Explicitly set working-directory for this step ---
+        working-directory: /github/workspace
         run: |
           RELEASE_DATE=$(date +'%Y-%m-%d')
           NEW_TAG="monthly-release-${RELEASE_DATE}"

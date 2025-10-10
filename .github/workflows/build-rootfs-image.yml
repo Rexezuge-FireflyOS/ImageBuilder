@@ -23,7 +23,7 @@ jobs:
 
       - name: Install build deps
         run: |
-          pacman -Sy --noconfirm arch-install-scripts squashfs-tools gpg
+          pacman -Sy --noconfirm arch-install-scripts squashfs-tools
 
       - name: Build rootfs
         run: |

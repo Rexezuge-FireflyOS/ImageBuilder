@@ -107,6 +107,6 @@ jobs:
         with:
           files: out/rootfs.squashfs
           tag_name: ${{ needs.build.outputs.new_tag }}
-          name: "Monthly Release ${{ needs.build.outputs.new_tag }}"
+          name: "${{ needs.build.outputs.new_tag }}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

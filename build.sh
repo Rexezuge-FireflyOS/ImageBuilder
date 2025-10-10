@@ -5,6 +5,7 @@ set -euo pipefail
 ROOTFS_DIR=$(pwd)/out/rootfs
 IMAGE_FILE=$(pwd)/out/rootfs.squashfs
 PKG_LIST_FILE=config/package-list.txt
+PACMAN_CONF=$(pwd)/pacman.conf.build
 
 # 清理
 rm -rf "$ROOTFS_DIR"
@@ -14,7 +15,7 @@ mkdir -p "$ROOTFS_DIR"
 ## 关键：创建 pacman 数据库目录
 ## 必须使用 sudo/root 权限创建，以确保后续 pacman 运行时有权限写入
 sudo mkdir -p "$ROOTFS_DIR/var/lib/pacman"
-sudo pacman --noconfirm --noprogressbar -r "$ROOTFS_DIR" -Sy $(cat "$PKG_LIST_FILE")
+sudo pacman --noconfirm --noprogressbar -r "$ROOTFS_DIR" --config "$PACMAN_CONF" -Sy $(cat "$PKG_LIST_FILE")
 
 # 基本配置：os-release, locales, hostname, systemd services（按需扩展）
 cat > "$ROOTFS_DIR/etc/os-release" <<EOF

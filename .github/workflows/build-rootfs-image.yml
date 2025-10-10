@@ -23,9 +23,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install build deps AND Git
+      # 修改：安装构建 DD 镜像所需的依赖
+      - name: Install build deps
         run: |
-          pacman -Sy --noconfirm base base-devel arch-install-scripts squashfs-tools git
+          pacman -Sy --noconfirm base base-devel arch-install-scripts git parted util-linux rsync
 
       - name: Setup GPG
         run: |
@@ -50,11 +51,12 @@ jobs:
           echo "NEW_TAG=$NEW_TAG" >> $GITHUB_OUTPUT
           echo "Calculated tag: $NEW_TAG"
 
+      # 修改：上传 DD 镜像作为产物
       - name: Upload rootfs artifact
         uses: actions/upload-artifact@v4
         with:
-          name: rootfs
-          path: out/rootfs.squashfs
+          name: rootfs-image
+          path: out/fireflyos.img # <-- 修改了产物路径
           retention-days: 7
 
   # ----------------------------------------------
@@ -71,10 +73,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      # 修改：下载 DD 镜像产物
       - name: Download rootfs artifact
         uses: actions/download-artifact@v4
         with:
-          name: rootfs
+          name: rootfs-image
           path: out/
 
       - name: Create and Push Git Tag
@@ -86,8 +89,6 @@ jobs:
           git config user.name "GitHub Actions Bot"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           
-          # We need to authenticate the git push using the token
-          # This command ensures the git remote is using the GITHUB_TOKEN for authentication
           REMOTE_URL="https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
           git remote set-url origin $REMOTE_URL
 
@@ -101,11 +102,12 @@ jobs:
             echo "tag_created=true" >> $GITHUB_OUTPUT
           fi
       
+      # 修改：在 Release 中包含 DD 镜像文件
       - name: Create GitHub Release with Artifact
         if: steps.create_tag.outputs.tag_created == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          files: out/rootfs.squashfs
+          files: out/fireflyos.img # <-- 修改了发布的文件
           tag_name: ${{ needs.build.outputs.new_tag }}
           name: "${{ needs.build.outputs.new_tag }}"
         env:

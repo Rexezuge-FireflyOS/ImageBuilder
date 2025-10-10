@@ -11,6 +11,30 @@ PACMAN_CONF=$(pwd)/pacman.conf.build
 rm -rf "$ROOTFS_DIR"
 mkdir -p "$ROOTFS_DIR"
 
+# =====================================================================
+# 新增步骤 1：安装第三方仓库的 Keyring
+# 确保您的主机系统已安装 'git' 和 'base-devel'（包含 makepkg）
+# =====================================================================
+KEYRING_NAME="alhp-keyring"
+KEYRING_DIR=$(mktemp -d)
+
+echo "-> 检查并安装 $KEYRING_NAME 从 AUR..."
+
+# 克隆 AUR 仓库
+git clone https://aur.archlinux.org/alhp-keyring.git "$KEYRING_DIR/$KEYRING_NAME"
+cd "$KEYRING_DIR/$KEYRING_NAME"
+
+# 使用 makepkg -si 安装
+# -s: 同步依赖
+# -i: 安装生成的包
+# 这将确保 GPG 密钥被正确导入到主机系统的 pacman 密钥环中
+makepkg -si --noconfirm
+
+# 返回原来的目录并清理临时文件
+cd - > /dev/null
+rm -rf "$KEYRING_DIR"
+echo "-> $KEYRING_NAME 安装完成。"
+
 # 安装基础包（使用 pacstrap）
 ## 关键：创建 pacman 数据库目录
 ## 必须使用 sudo/root 权限创建，以确保后续 pacman 运行时有权限写入

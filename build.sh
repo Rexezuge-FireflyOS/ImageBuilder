@@ -35,12 +35,25 @@ chown -R "$BUILDER_USER:$BUILDER_USER" "$KEYRING_DIR" # 转移父目录和子目
 # 3. **切换到新用户 ($BUILDER_USER) **运行 makepkg -s
 echo "-> 切换到 $BUILDER_USER 用户构建 $KEYRING_NAME..."
 
-# 使用 su 切换用户执行 makepkg
-# -c 后面的命令必须是单行字符串
+# 用于签署 alhp-keyring 源码包的公钥
+ALHP_SIGNING_KEY="8CA32F8BF3BC8088"
+
+# 使用 su 切换用户执行 GPG 导入和 makepkg
 su "$BUILDER_USER" -c "
     set -euo pipefail; 
+    
+    # 切换到构建目录
     cd \"$PKG_BUILD_DIR\" || exit 1; 
-    # -s: 同步依赖, --noconfirm: 非交互式
+
+    echo '导入源码签名公钥 $ALHP_SIGNING_KEY...';
+    
+    # **关键修复：以 builduser 身份导入 GPG 密钥**
+    # 使用 gpg --recv-keys 从默认的 keyserver 导入公钥
+    # 注意：这里可能需要一个可用的 keyserver，如 keyserver.ubuntu.com
+    gpg --keyserver keyserver.ubuntu.com --recv-keys $ALHP_SIGNING_KEY 2>/dev/null || \
+    gpg --keyserver hkps://keyserver.ubuntu.com --recv-keys $ALHP_SIGNING_KEY || true; # 尝试多种方式，失败也继续
+
+    # 构建软件包
     makepkg -s --noconfirm
 "
 # 注意：上面的 -c 块执行完毕，我们回到了 root

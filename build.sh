@@ -5,7 +5,6 @@ set -euo pipefail
 ROOTFS_DIR=$(pwd)/out/rootfs
 IMAGE_FILE=$(pwd)/out/rootfs.squashfs
 PKG_LIST_FILE=config/package-list.txt
-GPG_KEY="signing@example.com"   # CI 中使用 GPG 私钥签名（请在 CI secrets 中配置）
 
 # 清理
 rm -rf "$ROOTFS_DIR"

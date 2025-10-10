@@ -1,0 +1,44 @@
+name: Monthly rootfs build
+
+on:
+  schedule:
+    - cron: "0 2 1 * *"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+    env:
+      GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup GPG
+        run: |
+          echo "${{ secrets.GPG_PRIVATE_KEY }}" > /tmp/gpg.key
+          gpg --batch --import /tmp/gpg.key
+          rm -f /tmp/gpg.key
+
+      - name: Install build deps
+        run: |
+          pacman -Sy --noconfirm arch-install-scripts squashfs-tools gpg
+
+      - name: Build rootfs
+        run: |
+          chmod +x scripts/build-rootfs.sh
+          ./scripts/build-rootfs.sh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rootfs
+          path: out/rootfs.squashfs
+
+      - name: Create release with artifact
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/rootfs.squashfs
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

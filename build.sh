@@ -12,50 +12,54 @@ rm -rf "$ROOTFS_DIR"
 mkdir -p "$ROOTFS_DIR"
 
 # =====================================================================
-# 步骤 1：安装第三方仓库的 Keyring (在 Root 容器中)
+# 步骤 1：安装第三方仓库的 Keyring (在 Root 容器中，创建 Builder 用户)
 # =====================================================================
+BUILDER_USER="builduser" # 新建一个用户用于 makepkg
 KEYRING_NAME="alhp-keyring"
 KEYRING_DIR=$(mktemp -d)
 PKG_BUILD_DIR="$KEYRING_DIR/$KEYRING_NAME"
 
 echo "-> 检查并安装 $KEYRING_NAME 从 AUR..."
 
-# 1. 克隆 AUR 仓库
+# 1. **创建临时非 root 用户** builduser
+useradd -m -s /bin/bash "$BUILDER_USER"
+echo "-> 临时用户 $BUILDER_USER 创建成功。"
+
+# 2. 克隆 AUR 仓库
 git clone https://aur.archlinux.org/alhp-keyring.git "$PKG_BUILD_DIR"
 
-# 2. **切换到非特权用户 (nobody) **运行 makepkg -s
-echo "-> 切换到 nobody 用户构建 $KEYRING_NAME..."
-# 注意：构建时需要将当前目录切换到 PKG_BUILD_DIR
-# 我们使用 su nobody -s /bin/sh -c 来以 nobody 身份执行命令
-su nobody -s /bin/sh -c "
+# 3. **切换到新用户 ($BUILDER_USER) **运行 makepkg -s
+echo "-> 切换到 $BUILDER_USER 用户构建 $KEYRING_NAME..."
+
+# 将构建目录的所有权转移给 builduser，这样 makepkg 才能写入
+chown -R "$BUILDER_USER:$BUILDER_USER" "$PKG_BUILD_DIR"
+
+# 使用 su 切换用户
+su "$BUILDER_USER" -c "
+    set -euo pipefail # 确保构建过程中任一命令失败即退出
     cd \"$PKG_BUILD_DIR\" || exit 1
-    # 临时创建 home 目录以避免 makepkg 警告
-    export HOME=\"/tmp/nobody_home\"
-    mkdir -p \"\$HOME\"
     # -s: 同步依赖, --noconfirm: 非交互式
     makepkg -s --noconfirm
 "
 
-# 3. 找到生成的包文件名
-# 此时我们再次切换回 root (因为 su 命令执行完毕)
+# 4. 找到生成的包文件名
+# 此时我们再次切换回 root
 cd "$PKG_BUILD_DIR"
 ALHP_PKG=$(ls alhp-keyring-*.pkg.tar.zst 2>/dev/null | head -n 1)
 
-# 4. **Root 用户**运行 pacman -U 安装包
+# 5. **Root 用户**运行 pacman -U 安装包
 if [ -f "$ALHP_PKG" ]; then
     echo "-> 找到包: $ALHP_PKG，正在以 root 身份安装..."
-    # pacman -U 安装到主机系统 (即容器本身)
+    # pacman -U 安装到主机系统 (即容器本身)，导入 GPG 密钥
     pacman -U "$ALHP_PKG" --noconfirm --needed
 else
     echo "错误: 未找到生成的 alhp-keyring 包！请检查 makepkg 输出。"
-    # 打印 nobody 构建时的日志以供调试
-    echo "--- nobody 用户构建目录内容 ---"
-    ls -l "$PKG_BUILD_DIR"
     exit 1
 fi
 
-# 返回原来的目录并清理临时文件
+# 6. 清理临时用户、目录和文件
 cd - > /dev/null
+userdel -r "$BUILDER_USER"
 rm -rf "$KEYRING_DIR"
 echo "-> $KEYRING_NAME 安装完成，GPG 密钥已导入到容器的 pacman 密钥环。"
 

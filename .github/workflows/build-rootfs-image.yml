@@ -26,6 +26,8 @@ jobs:
           pacman -Sy --noconfirm base base-devel arch-install-scripts squashfs-tools
 
       - name: Build rootfs
+        env:
+          GPG_KEY: ${{ secrets.GPG_KEY }}
         run: |
           chmod +x build.sh
           ./build.sh

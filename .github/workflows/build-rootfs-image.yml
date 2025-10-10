@@ -6,17 +6,20 @@ on:
   workflow_dispatch: # Allows manual trigger
 
 jobs:
+  # ----------------------------------------------
+  # Job 1: Build (Runs inside the Arch Container)
+  # ----------------------------------------------
   build:
     runs-on: ubuntu-latest
     container:
       image: archlinux:latest
-      # GitHub Actions will mount the host's GITHUB_WORKSPACE to /github/workspace in the container by default.
-      # No need for custom options or path here for checkout.
+    outputs:
+      # Expose the calculated tag name and date to the next job
+      new_tag: ${{ steps.tag_info.outputs.NEW_TAG }}
+      release_date: ${{ steps.tag_info.outputs.RELEASE_DATE }}
     env:
       GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
     steps:
-      # All steps below will run inside the Arch Linux container unless explicitly overridden or new jobs are created.
-
       # Checkout to the default /github/workspace inside the container
       - uses: actions/checkout@v4
         with:
@@ -36,71 +39,79 @@ jobs:
 
       - name: Build rootfs
         # This runs inside the Arch Linux container
-        # The working directory is /github/workspace by default due to 'container' job
         env:
           GPG_KEY: ${{ secrets.GPG_KEY }}
         run: |
-          # The 'out' directory will be created relative to /github/workspace
           chmod +x build.sh
           ./build.sh
-          # The artifact 'out/rootfs.squashfs' will now be at /github/workspace/out/rootfs.squashfs
-          # inside the container, and thus also accessible from the host at $GITHUB_WORKSPACE/out/rootfs.squashfs
+          # rootfs.squashfs is now at /github/workspace/out/rootfs.squashfs
 
-      - name: Generate and push monthly release tag
-        id: create_tag
-        # This runs inside the Arch Linux container
+      - name: Calculate release date and tag name
+        id: tag_info
+        # Use the new $GITHUB_OUTPUT method
         run: |
           RELEASE_DATE=$(date +'%Y-%m-%d')
           NEW_TAG="monthly-release-${RELEASE_DATE}"
+          echo "RELEASE_DATE=$RELEASE_DATE" >> $GITHUB_OUTPUT
+          echo "NEW_TAG=$NEW_TAG" >> $GITHUB_OUTPUT
+          echo "Calculated tag: $NEW_TAG"
 
-          echo "Attempting to create and push tag: $NEW_TAG"
+      - name: Upload rootfs artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rootfs # Name of the artifact
+          path: out/rootfs.squashfs
+          retention-days: 7 # Optional: keep for 7 days
 
+  # ----------------------------------------------
+  # Job 2: Release (Runs on the Host Runner)
+  # ----------------------------------------------
+  release:
+    runs-on: ubuntu-latest # Runs on the host runner, outside the container
+    needs: build # Waits for the 'build' job to complete
+    steps:
+      - name: Checkout code (for git tagging)
+        # Need to checkout again on the host runner for git commands
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Need full history to push tags
+
+      - name: Download rootfs artifact
+        # The artifact is downloaded to the current working directory (e.g., /home/runner/work/repo/repo/out/)
+        uses: actions/download-artifact@v4
+        with:
+          name: rootfs
+          path: out/
+
+      - name: Create and Push Git Tag
+        # This step runs on the HOST runner, which has a stable git environment
+        id: create_tag
+        env:
+          NEW_TAG: ${{ needs.build.outputs.new_tag }}
+          RELEASE_DATE: ${{ needs.build.outputs.release_date }}
+        run: |
           git config user.name "GitHub Actions Bot"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          if git rev-parse "$NEW_TAG" >/dev/null 2>&1; then
+          # Check if tag already exists before creating/pushing
+          if git ls-remote --tags origin | grep "refs/tags/$NEW_TAG"; then
             echo "Tag $NEW_TAG already exists. Skipping tag creation."
-            echo "::set-output name=tag_created::false"
+            echo "tag_created=false" >> $GITHUB_OUTPUT
           else
             git tag -a "$NEW_TAG" -m "Monthly automated release for $RELEASE_DATE"
+            # Use the GITHUB_TOKEN for pushing the tag
             git push origin "$NEW_TAG"
             echo "Tag $NEW_TAG created and pushed successfully."
-            echo "::set-output name=tag_created::true"
+            echo "tag_created=true" >> $GITHUB_OUTPUT
           fi
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      # --- IMPORTANT CHANGE HERE ---
-      # The 'Upload artifact' and 'Create release' steps will now run on the HOST runner.
-      # To do this, we explicitly break out of the container context.
-
-  # Define a new job that depends on 'build' to ensure artifacts are ready
-  # This new job will run on the HOST runner (ubuntu-latest)
-  release_artifacts:
-    runs-on: ubuntu-latest
-    needs: build # This job will wait for the 'build' job to complete
-    steps:
-      # If you need the *code* in this job, you would do another checkout.
-      # However, for just uploading an artifact and creating a release,
-      # you don't necessarily need the full repo checked out again,
-      # as long as the artifact from the 'build' job is uploaded first
-      # and then downloaded.
-
-      # Option 1 (Recommended): Download the artifact uploaded by the 'build' job
-      - name: Download rootfs artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: rootfs # Name of the artifact uploaded in the 'build' job
-          path: out/ # Path to download it to on the host runner
-
-      - name: Create release with artifact
-        # This step runs on the host (ubuntu-latest)
-        # We need to know if a tag was created in the 'build' job.
-        # We access the output of the 'create_tag' step from the 'build' job.
-        if: needs.build.outputs.tag_created_output == 'true'
+      
+      - name: Create GitHub Release with Artifact
+        # Only run if a new tag was successfully created
+        if: steps.create_tag.outputs.tag_created == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          files: out/rootfs.squashfs # Path relative to the current working directory on the host
-          tag_name: ${{ needs.build.outputs.release_tag_name_output }} # Use the dynamically created tag name
+          files: out/rootfs.squashfs # Path is relative to the host runner's workspace
+          tag_name: ${{ needs.build.outputs.new_tag }} # Use the dynamically created tag name
+          name: "Monthly Release ${{ needs.build.outputs.new_tag }}"
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Required for release creation

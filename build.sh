@@ -93,20 +93,38 @@ userdel -r "$BUILDER_USER"
 rm -rf "$KEYRING_DIR"
 echo "-> $KEYRING_NAME 安装完成，GPG 密钥已导入到容器的 pacman 密钥环。"
 
+# ==========================================================
+# 步骤 2: 创建 RootFS
+# ==========================================================
 # 安装基础包（使用 pacstrap）
 ## 关键：创建 pacman 数据库目录
 ## 必须使用 sudo/root 权限创建，以确保后续 pacman 运行时有权限写入
 sudo mkdir -p "$ROOTFS_DIR/var/lib/pacman"
 sudo pacman --noconfirm --noprogressbar -r "$ROOTFS_DIR" --config "$PACMAN_CONF" -Sy $(cat "$PKG_LIST_FILE")
 
-# 基本配置：os-release, locales, hostname, systemd services（按需扩展）
-cat > "$ROOTFS_DIR/etc/os-release" <<EOF
-NAME="MyStableOS"
+# ==========================================================
+# 步骤 3: 配置目标系统 (在包安装完成后！)
+# ==========================================================
+echo "==> Configuring the target system..."
+
+# 关键修复：确保 /etc 目录存在，然后再写入文件
+# pacman 应该已经创建了它，但我们为了保险起见再次确认
+sudo mkdir -p "$ROOTFS_DIR/etc"
+
+echo "--> Creating /etc/os-release..."
+sudo tee "$ROOTFS_DIR/etc/os-release" > /dev/null <<'EOF'
+NAME="FireflyOS"
 VERSION="$(date +%Y.%m)"
-ID=mystable
+ID=arch
 EOF
 
+echo "--> Setting hostname..."
 echo "mystable" | sudo tee "$ROOTFS_DIR/etc/hostname"
+
+# ==========================================================
+# 步骤 4: 清理和打包
+# ==========================================================
+echo "==> Cleaning up package cache..."
 
 # 清理 pacman 缓存以缩小镜像
 # 注意：arch-chroot 仍然需要 CAP_SYS_ADMIN 权限，这在无特权容器中仍然是问题！

@@ -1,0 +1,17 @@
+[options]
+SigLevel = PackageRequired
+Architecture = x86_64
+
+[core-x86-64-v3]
+Server = https://cdn.alhp.dev/$repo/os/$arch/
+Server = https://alhp.krautflare.de/$repo/os/$arch/
+
+[core]
+Include = /etc/pacman.d/mirrorlist
+
+[extra-x86-64-v3]
+Server = https://cdn.alhp.dev/$repo/os/$arch/
+Server = https://alhp.krautflare.de/$repo/os/$arch/
+
+[extra]
+Include = /etc/pacman.d/mirrorlist

@@ -14,6 +14,8 @@ jobs:
       GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup GPG
         run: |
@@ -38,7 +40,36 @@ jobs:
           name: rootfs
           path: out/rootfs.squashfs
 
+      - name: Generate and push monthly release tag
+        id: create_tag
+        run: |
+          # Get the current date in YYYY-MM-DD format
+          RELEASE_DATE=$(date +'%Y-%m-%d')
+          NEW_TAG="monthly-release-${RELEASE_DATE}"
+
+          echo "Attempting to create and push tag: $NEW_TAG"
+
+          # Configure Git
+          git config user.name "GitHub Actions Bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Check if tag already exists (important for retries/reruns)
+          if git rev-parse "$NEW_TAG" >/dev/null 2>&1; then
+            echo "Tag $NEW_TAG already exists. Skipping tag creation."
+            echo "::set-output name=tag_created::false"
+          else
+            # Create the tag
+            git tag -a "$NEW_TAG" -m "Monthly automated release for $RELEASE_DATE"
+            # Push the tag (using GITHUB_TOKEN for authentication)
+            git push origin "$NEW_TAG"
+            echo "Tag $NEW_TAG created and pushed successfully."
+            echo "::set-output name=tag_created::true"
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Create release with artifact
+        if: steps.create_tag.outputs.tag_created == 'true' # Only create release if a new tag was pushed
         uses: softprops/action-gh-release@v2
         with:
           files: out/rootfs.squashfs

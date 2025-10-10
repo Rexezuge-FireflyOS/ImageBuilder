@@ -65,7 +65,23 @@ ALHP_PKG=$(ls alhp-keyring-*.pkg.tar.zst 2>/dev/null | head -n 1)
 # 5. **Root 用户**运行 pacman -U 安装包
 if [ -f "$ALHP_PKG" ]; then
     echo "-> 找到包: $ALHP_PKG，正在以 root 身份安装..."
+
+    # --------------------------------------------------------------------
+    # 关键修复 1: 初始化 pacman 密钥环 (解决 'no secret key' 错误)
+    # 这一步仅在 /etc/pacman.d/gnupg/ 不存在或未初始化时运行
+    # 这是必须的，因为 pacman -U 安装 keyring 包时需要更新信任数据库
+    echo "-> 确保 root pacman 密钥环已初始化..."
+    pacman-key --init || true # 允许失败，如果已经初始化则跳过
+
+    # --------------------------------------------------------------------
+    # pacman -U 安装到主机系统 (即容器本身)，导入 GPG 密钥
     pacman -U "$ALHP_PKG" --noconfirm --needed
+
+    ALHP_MAIN_KEY="BC3993A9EBDD40E5C242D72F0FE58E8D1B980E51"
+
+    echo "-> 明确信任 ALHP GPG 密钥 $ALHP_MAIN_KEY..."
+    # pacman-key --lsign-key <KEY_ID> 明确标记密钥为本地信任
+    pacman-key --lsign-key "$ALHP_MAIN_KEY"
 else
     echo "错误: 未找到生成的 alhp-keyring 包！请检查 makepkg 输出。"
     exit 1

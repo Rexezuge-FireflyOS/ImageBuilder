@@ -27,8 +27,8 @@ jobs:
 
       - name: Build rootfs
         run: |
-          chmod +x scripts/build-rootfs.sh
-          ./scripts/build-rootfs.sh
+          chmod +x build.sh
+          ./build.sh
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

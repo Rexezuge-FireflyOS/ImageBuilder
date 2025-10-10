@@ -9,7 +9,6 @@ adwaita-fonts
 adwaita-icon-theme
 adwaita-icon-theme-legacy
 aha
-alhp-keyring
 alsa-card-profiles
 alsa-lib
 alsa-topology-conf

@@ -85,61 +85,69 @@ jobs:
           mkdir -p out/rootfs
           tar -xzf out/rootfs.tar.gz -C out/rootfs
 
-      - name: Create DD Image on Host (using losetup, parted, mkfs)
+      - name: Create DD Image on Host (using losetup, parted, mkfs, shrink)
         env:
           ROOTFS_DIR: out/rootfs
           IMAGE_FILE: out/fireflyos.img
-          IMAGE_SIZE_MB: 8192  # 调整到 4GB
+          IMAGE_SIZE_MB: 8192   # 原始最大镜像容量
           GPG_KEY: ${{ secrets.GPG_KEY }}
         run: |
           set -euo pipefail
-      
+
           IMAGE_FILE="$IMAGE_FILE"
           ROOTFS_DIR="$ROOTFS_DIR"
           MOUNT_POINT=$(mktemp -d)
 
           echo "==> Rootfs size preview:"
-          du -sh "$ROOTFS_DIR" || true
-      
+          du -sh "$ROOTFS_DIR"
+
           echo "==> Creating image file..."
           truncate -s "${IMAGE_SIZE_MB}M" "$IMAGE_FILE"
-      
+
           echo "==> Partitioning..."
           sudo parted -s "$IMAGE_FILE" mklabel msdos
           sudo parted -s "$IMAGE_FILE" mkpart primary ext4 1MiB 100%
-      
+
           echo "==> Setting up loop device..."
           LOOP_DEV=$(sudo losetup -f --show -P "$IMAGE_FILE")
           echo "-> 镜像已关联到 $LOOP_DEV"
-      
           sudo partprobe "$LOOP_DEV"
           sleep 2
-      
           PART_DEV="${LOOP_DEV}p1"
-          if [ ! -e "$PART_DEV" ]; then
-              echo "等待分区节点出现..."
-              sleep 3
-          fi
 
           echo "==> Formatting $PART_DEV..."
           sudo mkfs.ext4 -F -L ROOTFS "$PART_DEV"
-          sudo tune2fs -m 0 "$PART_DEV"  # 关闭预留空间
-      
+          sudo tune2fs -m 0 "$PART_DEV" # 禁用保留空间
+
           echo "==> Mounting filesystem..."
           sudo mount "$PART_DEV" "$MOUNT_POINT"
-      
+
           echo "==> Copying rootfs contents..."
           sudo rsync -a "$ROOTFS_DIR/" "$MOUNT_POINT/"
-      
-          echo "==> Cleaning up..."
+
+          echo "==> Cleaning and shrinking filesystem..."
           sudo umount "$MOUNT_POINT"
+
+          # 清理空闲块并最小化
+          sudo e2fsck -f -y "$PART_DEV"
+          sudo resize2fs -M "$PART_DEV"
+
+          # 获取实际最小大小（单位：块）
+          BLOCK_COUNT=$(sudo dumpe2fs -h "$PART_DEV" | grep "Block count" | awk '{print $3}')
+          BLOCK_SIZE=$(sudo dumpe2fs -h "$PART_DEV" | grep "Block size" | awk '{print $3}')
+          ACTUAL_SIZE=$((BLOCK_COUNT * BLOCK_SIZE))
+          echo "==> Actual filesystem size: $((ACTUAL_SIZE / 1024 / 1024)) MB"
+
+          # 卸载 loop 并裁剪镜像文件
           sudo losetup -d "$LOOP_DEV"
-          rm -rf "$MOUNT_POINT"
-      
+          truncate -s "$ACTUAL_SIZE" "$IMAGE_FILE"
+
           echo "==> Signing the image..."
           gpg --detach-sign --armor --local-user "$GPG_KEY" -o "${IMAGE_FILE}.sig" "$IMAGE_FILE"
-      
-          echo "==> DD image creation complete: $IMAGE_FILE"
+
+          echo "✅ Final image created: $IMAGE_FILE"
+          ls -lh "$IMAGE_FILE"
+
 
       - name: Upload final DD image artifact
         uses: actions/upload-artifact@v4
@@ -167,6 +175,10 @@ jobs:
         with:
           name: final-image
           path: out/
+          
+      - name: Compress image before upload
+        run: |
+          xz -T0 -9 out/fireflyos.img
 
       - name: Calculate release date and tag name
         id: tag_info
@@ -208,7 +220,7 @@ jobs:
         if: steps.create_tag.outputs.tag_created == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          files: out/fireflyos.img
+          files: out/fireflyos.img.xz
           tag_name: ${{ steps.tag_info.outputs.NEW_TAG }}
           name: "${{ steps.tag_info.outputs.NEW_TAG }}"
           body: |

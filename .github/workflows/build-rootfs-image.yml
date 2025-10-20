@@ -90,7 +90,7 @@ jobs:
           ROOTFS_DIR: out/rootfs
           IMAGE_FILE: out/fireflyos.img
           IMAGE_SIZE_MB: 8192   # 原始最大镜像容量
-          GPG_KEY: ${{ secrets.GPG_KEY }}
+          GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
         run: |
           set -euo pipefail
 
@@ -143,7 +143,7 @@ jobs:
           truncate -s "$ACTUAL_SIZE" "$IMAGE_FILE"
 
           echo "==> Signing the image..."
-          gpg --detach-sign --armor --local-user "$GPG_KEY" -o "${IMAGE_FILE}.sig" "$IMAGE_FILE"
+          gpg --detach-sign --armor --local-user "$GPG_KEY_ID" -o "${IMAGE_FILE}.sig" "$IMAGE_FILE"
 
           echo "✅ Final image created: $IMAGE_FILE"
           ls -lh "$IMAGE_FILE"

@@ -1,4 +1,4 @@
-name: Monthly rootfs build
+name: Build Root Image
 
 on:
   schedule:

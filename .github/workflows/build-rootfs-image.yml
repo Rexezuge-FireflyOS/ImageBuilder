@@ -153,7 +153,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: final-image
-          path: out/fireflyos.img
+          path: |
+            out/fireflyos.img
+            out/fireflyos.img.sig
           retention-days: 7
 
   # ----------------------------------------------
@@ -220,7 +222,9 @@ jobs:
         if: steps.create_tag.outputs.tag_created == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          files: out/fireflyos.img.xz
+          files: |
+            out/fireflyos.img.xz
+            out/fireflyos.img.sig
           tag_name: ${{ steps.tag_info.outputs.NEW_TAG }}
           name: "${{ steps.tag_info.outputs.NEW_TAG }}"
           body: |

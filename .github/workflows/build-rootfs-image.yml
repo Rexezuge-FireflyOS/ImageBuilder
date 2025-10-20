@@ -155,7 +155,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: create-image
     permissions:
-      contents: write 
+      contents: write
     steps:
       - name: Checkout code (for git tagging)
         uses: actions/checkout@v4
@@ -167,35 +167,55 @@ jobs:
         with:
           name: final-image
           path: out/
-        
+
+      - name: Calculate release date and tag name
+        id: tag_info
+        run: |
+          # 生成日期与唯一 Unix 时间戳
+          RELEASE_DATE=$(date +'%Y-%m-%d')
+          TIMESTAMP=$(date +%s)
+          NEW_TAG="${RELEASE_DATE}-${TIMESTAMP}"
+
+          echo "RELEASE_DATE=$RELEASE_DATE" >> $GITHUB_OUTPUT
+          echo "NEW_TAG=$NEW_TAG" >> $GITHUB_OUTPUT
+          echo "✅ Calculated tag: $NEW_TAG"
+
       - name: Create and Push Git Tag
         id: create_tag
         env:
-          NEW_TAG: ${{ needs.build.outputs.new_tag }}
-          RELEASE_DATE: ${{ needs.build.outputs.release_date }}
+          NEW_TAG: ${{ steps.tag_info.outputs.NEW_TAG }}
+          RELEASE_DATE: ${{ steps.tag_info.outputs.RELEASE_DATE }}
         run: |
           git config user.name "GitHub Actions Bot"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          
-          REMOTE_URL="https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
-          git remote set-url origin $REMOTE_URL
 
-          if git ls-remote --tags origin | grep "refs/tags/$NEW_TAG"; then
-            echo "Tag $NEW_TAG already exists. Skipping tag creation."
+          REMOTE_URL="https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
+          git remote set-url origin "$REMOTE_URL"
+
+          # 检查是否已存在相同标签
+          if git ls-remote --tags origin | grep -q "refs/tags/$NEW_TAG$"; then
+            echo "⚠️ Tag $NEW_TAG already exists. Skipping tag creation."
             echo "tag_created=false" >> $GITHUB_OUTPUT
           else
+            echo "🏷️ Creating new tag: $NEW_TAG"
             git tag -a "$NEW_TAG" -m "Monthly automated release for $RELEASE_DATE"
             git push origin "$NEW_TAG"
-            echo "Tag $NEW_TAG created and pushed successfully."
+            echo "✅ Tag $NEW_TAG created and pushed successfully."
             echo "tag_created=true" >> $GITHUB_OUTPUT
           fi
-      
+
       - name: Create GitHub Release with Artifact
         if: steps.create_tag.outputs.tag_created == 'true'
         uses: softprops/action-gh-release@v2
         with:
           files: out/fireflyos.img
-          tag_name: ${{ needs.build.outputs.new_tag }}
-          name: "${{ needs.build.outputs.new_tag }}"
+          tag_name: ${{ steps.tag_info.outputs.NEW_TAG }}
+          name: "${{ steps.tag_info.outputs.NEW_TAG }}"
+          body: |
+            ## Automated Monthly RootFS Release
+            **Release Date:** ${{ steps.tag_info.outputs.RELEASE_DATE }}
+            **Tag:** `${{ steps.tag_info.outputs.NEW_TAG }}`
+
+            This release was automatically generated and published by the GitHub Actions workflow.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

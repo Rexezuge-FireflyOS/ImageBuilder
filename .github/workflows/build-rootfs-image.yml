@@ -89,7 +89,7 @@ jobs:
         env:
           ROOTFS_DIR: out/rootfs
           IMAGE_FILE: out/fireflyos.img
-          IMAGE_SIZE_MB: 4096  # 调整到 4GB
+          IMAGE_SIZE_MB: 8192  # 调整到 4GB
           GPG_KEY: ${{ secrets.GPG_KEY }}
         run: |
           set -euo pipefail

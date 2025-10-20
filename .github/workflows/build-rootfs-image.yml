@@ -42,19 +42,15 @@ jobs:
           echo "NEW_TAG=$NEW_TAG" >> $GITHUB_OUTPUT
           echo "Calculated tag: $NEW_TAG"
 
-      # --- 新增步骤：将 rootfs 目录打包 ---
       - name: Archive rootfs directory to bypass upload restrictions
         run: |
-          # -C out/rootfs: 先切换到该目录再打包，这样压缩包里不会包含 'out/rootfs' 前缀
-          # .:      打包当前目录（即 out/rootfs）下的所有内容
           tar -czf out/rootfs.tar.gz -C out/rootfs .
-      
-      # --- 修改步骤：上传打包后的文件 ---
+
       - name: Upload rootfs archive artifact
         uses: actions/upload-artifact@v4
         with:
-          name: rootfs-archive # 修改产物名称
-          path: out/rootfs.tar.gz # 上传 .tar.gz 文件
+          name: rootfs-archive
+          path: out/rootfs.tar.gz
           retention-days: 7
 
   # ----------------------------------------------
@@ -67,11 +63,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # --- 修改步骤：下载打包后的文件 ---
       - name: Download rootfs archive artifact
         uses: actions/download-artifact@v4
         with:
-          name: rootfs-archive # 使用新的产物名称
+          name: rootfs-archive
           path: out/
 
       - name: Install DD image tools on Host
@@ -85,7 +80,6 @@ jobs:
           gpg --batch --import /tmp/gpg.key
           rm -f /tmp/gpg.key
       
-      # --- 新增步骤：解压 rootfs 目录 ---
       - name: Extract rootfs directory
         run: |
           mkdir -p out/rootfs
@@ -95,7 +89,7 @@ jobs:
         env:
           ROOTFS_DIR: out/rootfs
           IMAGE_FILE: out/fireflyos.img
-          IMAGE_SIZE_MB: 2048
+          IMAGE_SIZE_MB: 4096  # 调整到 4GB
           GPG_KEY: ${{ secrets.GPG_KEY }}
         run: |
           set -euo pipefail
@@ -103,43 +97,41 @@ jobs:
           IMAGE_FILE="$IMAGE_FILE"
           ROOTFS_DIR="$ROOTFS_DIR"
           MOUNT_POINT=$(mktemp -d)
+
+          echo "==> Rootfs size preview:"
+          du -sh "$ROOTFS_DIR" || true
       
-          # 创建空镜像文件
+          echo "==> Creating image file..."
           truncate -s "${IMAGE_SIZE_MB}M" "$IMAGE_FILE"
       
-          # 使用 parted 创建分区表和一个主分区
+          echo "==> Partitioning..."
           sudo parted -s "$IMAGE_FILE" mklabel msdos
           sudo parted -s "$IMAGE_FILE" mkpart primary ext4 1MiB 100%
       
-          # 关联到 loop 设备
+          echo "==> Setting up loop device..."
           LOOP_DEV=$(sudo losetup -f --show -P "$IMAGE_FILE")
-          if [ -z "$LOOP_DEV" ]; then
-              echo "错误：无法找到可用的 loop 设备。"
-              exit 1
-          fi
           echo "-> 镜像已关联到 $LOOP_DEV"
       
-          # 确保系统识别分区
           sudo partprobe "$LOOP_DEV"
           sleep 2
       
-          # 分区路径
           PART_DEV="${LOOP_DEV}p1"
           if [ ! -e "$PART_DEV" ]; then
               echo "等待分区节点出现..."
               sleep 3
           fi
-      
-          echo "-> 正在格式化分区 $PART_DEV..."
+
+          echo "==> Formatting $PART_DEV..."
           sudo mkfs.ext4 -F -L ROOTFS "$PART_DEV"
+          sudo tune2fs -m 0 "$PART_DEV"  # 关闭预留空间
       
-          echo "-> 正在挂载 $PART_DEV 到 $MOUNT_POINT..."
+          echo "==> Mounting filesystem..."
           sudo mount "$PART_DEV" "$MOUNT_POINT"
       
-          echo "-> 正在将 rootfs 内容复制到镜像..."
+          echo "==> Copying rootfs contents..."
           sudo rsync -a "$ROOTFS_DIR/" "$MOUNT_POINT/"
       
-          echo "-> 卸载分区并分离 loop 设备..."
+          echo "==> Cleaning up..."
           sudo umount "$MOUNT_POINT"
           sudo losetup -d "$LOOP_DEV"
           rm -rf "$MOUNT_POINT"
@@ -147,9 +139,8 @@ jobs:
           echo "==> Signing the image..."
           gpg --detach-sign --armor --local-user "$GPG_KEY" -o "${IMAGE_FILE}.sig" "$IMAGE_FILE"
       
-          echo "DD image creation complete: $IMAGE_FILE"
+          echo "==> DD image creation complete: $IMAGE_FILE"
 
-      
       - name: Upload final DD image artifact
         uses: actions/upload-artifact@v4
         with:

@@ -99,39 +99,56 @@ jobs:
           GPG_KEY: ${{ secrets.GPG_KEY }}
         run: |
           set -euo pipefail
-          
+      
           IMAGE_FILE="$IMAGE_FILE"
           ROOTFS_DIR="$ROOTFS_DIR"
           MOUNT_POINT=$(mktemp -d)
-
+      
+          # 创建空镜像文件
           truncate -s "${IMAGE_SIZE_MB}M" "$IMAGE_FILE"
+      
+          # 使用 parted 创建分区表和一个主分区
           sudo parted -s "$IMAGE_FILE" mklabel msdos
-          sudo partx -a "$IMAGE_FILE"
-          LOOP_DEV=$(sudo losetup -f --show "$IMAGE_FILE")
+          sudo parted -s "$IMAGE_FILE" mkpart primary ext4 1MiB 100%
+      
+          # 关联到 loop 设备
+          LOOP_DEV=$(sudo losetup -f --show -P "$IMAGE_FILE")
           if [ -z "$LOOP_DEV" ]; then
               echo "错误：无法找到可用的 loop 设备。"
               exit 1
           fi
           echo "-> 镜像已关联到 $LOOP_DEV"
-          sudo kpartx -a "$LOOP_DEV"
-          PART_DEV="/dev/mapper/$(basename $LOOP_DEV)p1"
+      
+          # 确保系统识别分区
+          sudo partprobe "$LOOP_DEV"
           sleep 2
+      
+          # 分区路径
+          PART_DEV="${LOOP_DEV}p1"
+          if [ ! -e "$PART_DEV" ]; then
+              echo "等待分区节点出现..."
+              sleep 3
+          fi
+      
           echo "-> 正在格式化分区 $PART_DEV..."
           sudo mkfs.ext4 -F -L ROOTFS "$PART_DEV"
+      
           echo "-> 正在挂载 $PART_DEV 到 $MOUNT_POINT..."
           sudo mount "$PART_DEV" "$MOUNT_POINT"
+      
           echo "-> 正在将 rootfs 内容复制到镜像..."
           sudo rsync -a "$ROOTFS_DIR/" "$MOUNT_POINT/"
+      
           echo "-> 卸载分区并分离 loop 设备..."
           sudo umount "$MOUNT_POINT"
-          sudo kpartx -d "$LOOP_DEV"
           sudo losetup -d "$LOOP_DEV"
           rm -rf "$MOUNT_POINT"
-          
+      
           echo "==> Signing the image..."
           gpg --detach-sign --armor --local-user "$GPG_KEY" -o "${IMAGE_FILE}.sig" "$IMAGE_FILE"
-          
+      
           echo "DD image creation complete: $IMAGE_FILE"
+
       
       - name: Upload final DD image artifact
         uses: actions/upload-artifact@v4

@@ -53,9 +53,9 @@ jobs:
           path: out/rootfs.tar.gz
           retention-days: 7
 
-  # ------------------------------------------------------------
-  # Job 2: Create F2FS System Image (on Host Runner)
-  # ------------------------------------------------------------
+  # ----------------------------------------------
+  # Job 2: Create F2FS Image (Runs on the Host Runner)
+  # ----------------------------------------------
   create-image:
     runs-on: ubuntu-latest
     needs: build
@@ -69,26 +69,26 @@ jobs:
           name: rootfs-archive
           path: out/
 
-      - name: Install image creation tools
+      - name: Install F2FS image tools on Host
         run: |
           sudo apt-get update
-          sudo apt-get install -y parted f2fs-tools rsync gpg
+          sudo apt-get install -y parted f2fs-tools rsync
 
       - name: Setup GPG on Host
         run: |
           echo "${{ secrets.GPG_PRIVATE_KEY }}" > /tmp/gpg.key
           gpg --batch --import /tmp/gpg.key
           rm -f /tmp/gpg.key
-
+      
       - name: Extract rootfs directory
         run: |
           mkdir -p out/rootfs
           tar -xzf out/rootfs.tar.gz -C out/rootfs
 
-      - name: Create F2FS Root Image
+      - name: Create DD Image with F2FS filesystem
         env:
           ROOTFS_DIR: out/rootfs
-          IMAGE_FILE: out/fireflyos-f2fs.img
+          IMAGE_FILE: out/fireflyos.img
           IMAGE_SIZE_MB: 8192
           GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
         run: |
@@ -96,17 +96,16 @@ jobs:
 
           IMAGE_FILE="$IMAGE_FILE"
           ROOTFS_DIR="$ROOTFS_DIR"
-          MOUNT_POINT=$(mktemp -d)
 
           echo "==> Rootfs size preview:"
           du -sh "$ROOTFS_DIR"
 
-          echo "==> Creating image file..."
+          echo "==> Creating blank image file..."
           truncate -s "${IMAGE_SIZE_MB}M" "$IMAGE_FILE"
 
           echo "==> Partitioning image..."
           sudo parted -s "$IMAGE_FILE" mklabel msdos
-          sudo parted -s "$IMAGE_FILE" mkpart primary 1MiB 100%
+          sudo parted -s "$IMAGE_FILE" mkpart primary f2fs 1MiB 100%
 
           echo "==> Setting up loop device..."
           LOOP_DEV=$(sudo losetup -f --show -P "$IMAGE_FILE")
@@ -115,37 +114,31 @@ jobs:
           sleep 2
           PART_DEV="${LOOP_DEV}p1"
 
-          echo "==> Formatting partition as F2FS..."
-          sudo mkfs.f2fs -f -l ROOTFS "$PART_DEV"
+          echo "==> Formatting and embedding rootfs (F2FS)..."
+          sudo mkfs.f2fs -f -l ROOTFS -d "$ROOTFS_DIR" "$PART_DEV"
 
-          echo "==> Mounting filesystem..."
-          sudo mount "$PART_DEV" "$MOUNT_POINT"
-
-          echo "==> Copying rootfs contents..."
-          sudo rsync -aHAX --delete "$ROOTFS_DIR/" "$MOUNT_POINT/"
-
-          echo "==> Cleaning filesystem (fstrim)..."
-          sudo fstrim -v "$MOUNT_POINT" || true
-
-          echo "==> Unmounting and detaching loop..."
-          sudo umount "$MOUNT_POINT"
+          echo "==> Cleaning up..."
           sudo losetup -d "$LOOP_DEV"
-          rm -rf "$MOUNT_POINT"
 
-          echo "==> Signing image..."
+          echo "==> Calculating actual image size..."
+          ACTUAL_SIZE=$(du -b "$IMAGE_FILE" | awk '{print $1}')
+          echo "Actual image size: $((ACTUAL_SIZE / 1024 / 1024)) MB"
+
+          echo "==> Signing the image..."
           gpg --detach-sign --armor --local-user "$GPG_KEY_ID" -o "${IMAGE_FILE}.sig" "$IMAGE_FILE"
 
-          echo "✅ Final F2FS image created:"
+          echo "✅ Final image created: $IMAGE_FILE"
           ls -lh "$IMAGE_FILE"
 
-      - name: Upload final F2FS image
+      - name: Upload final DD image artifact
         uses: actions/upload-artifact@v4
         with:
-          name: final-f2fs-image
+          name: final-image
           path: |
-            out/fireflyos-f2fs.img
-            out/fireflyos-f2fs.img.sig
+            out/fireflyos.img
+            out/fireflyos.img.sig
           retention-days: 7
+
 
   # ------------------------------------------------------------
   # Job 3: Release to GitHub

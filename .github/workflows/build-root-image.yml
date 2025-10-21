@@ -1,4 +1,4 @@
-name: Build Root Image
+name: Build Root Image (f2fs)
 
 on:
   schedule:
@@ -6,9 +6,9 @@ on:
   workflow_dispatch:
 
 jobs:
-  # ----------------------------------------------
-  # Job 1: Build (Runs inside the Arch Container)
-  # ----------------------------------------------
+  # ------------------------------------------------------------
+  # Job 1: Build RootFS Directory (inside Arch Container)
+  # ------------------------------------------------------------
   build:
     runs-on: ubuntu-latest
     container:
@@ -23,7 +23,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install build deps
+      - name: Install build dependencies
         run: |
           pacman -Sy --noconfirm base base-devel arch-install-scripts git
 
@@ -53,9 +53,9 @@ jobs:
           path: out/rootfs.tar.gz
           retention-days: 7
 
-  # ----------------------------------------------
-  # Job 2: Create DD Image (Runs on the Host Runner)
-  # ----------------------------------------------
+  # ------------------------------------------------------------
+  # Job 2: Create F2FS System Image (on Host Runner)
+  # ------------------------------------------------------------
   create-image:
     runs-on: ubuntu-latest
     needs: build
@@ -69,27 +69,27 @@ jobs:
           name: rootfs-archive
           path: out/
 
-      - name: Install DD image tools on Host
+      - name: Install image creation tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y parted e2fsprogs rsync
+          sudo apt-get install -y parted f2fs-tools rsync gpg
 
       - name: Setup GPG on Host
         run: |
           echo "${{ secrets.GPG_PRIVATE_KEY }}" > /tmp/gpg.key
           gpg --batch --import /tmp/gpg.key
           rm -f /tmp/gpg.key
-      
+
       - name: Extract rootfs directory
         run: |
           mkdir -p out/rootfs
           tar -xzf out/rootfs.tar.gz -C out/rootfs
 
-      - name: Create DD Image on Host (using losetup, parted, mkfs, shrink)
+      - name: Create F2FS Root Image
         env:
           ROOTFS_DIR: out/rootfs
-          IMAGE_FILE: out/fireflyos.img
-          IMAGE_SIZE_MB: 8192   # 原始最大镜像容量
+          IMAGE_FILE: out/fireflyos-f2fs.img
+          IMAGE_SIZE_MB: 8192
           GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
         run: |
           set -euo pipefail
@@ -104,9 +104,9 @@ jobs:
           echo "==> Creating image file..."
           truncate -s "${IMAGE_SIZE_MB}M" "$IMAGE_FILE"
 
-          echo "==> Partitioning..."
+          echo "==> Partitioning image..."
           sudo parted -s "$IMAGE_FILE" mklabel msdos
-          sudo parted -s "$IMAGE_FILE" mkpart primary ext4 1MiB 100%
+          sudo parted -s "$IMAGE_FILE" mkpart primary 1MiB 100%
 
           echo "==> Setting up loop device..."
           LOOP_DEV=$(sudo losetup -f --show -P "$IMAGE_FILE")
@@ -115,81 +115,68 @@ jobs:
           sleep 2
           PART_DEV="${LOOP_DEV}p1"
 
-          echo "==> Formatting $PART_DEV..."
-          sudo mkfs.ext4 -F -L ROOTFS "$PART_DEV"
-          sudo tune2fs -m 0 "$PART_DEV" # 禁用保留空间
+          echo "==> Formatting partition as F2FS..."
+          sudo mkfs.f2fs -f -l ROOTFS "$PART_DEV"
 
           echo "==> Mounting filesystem..."
           sudo mount "$PART_DEV" "$MOUNT_POINT"
 
           echo "==> Copying rootfs contents..."
-          sudo rsync -a "$ROOTFS_DIR/" "$MOUNT_POINT/"
+          sudo rsync -aHAX --delete "$ROOTFS_DIR/" "$MOUNT_POINT/"
 
-          echo "==> Cleaning and shrinking filesystem..."
+          echo "==> Cleaning filesystem (fstrim)..."
+          sudo fstrim -v "$MOUNT_POINT" || true
+
+          echo "==> Unmounting and detaching loop..."
           sudo umount "$MOUNT_POINT"
-
-          # 清理空闲块并最小化
-          sudo e2fsck -f -y "$PART_DEV"
-          sudo resize2fs -M "$PART_DEV"
-
-          # 获取实际最小大小（单位：块）
-          BLOCK_COUNT=$(sudo dumpe2fs -h "$PART_DEV" | grep "Block count" | awk '{print $3}')
-          BLOCK_SIZE=$(sudo dumpe2fs -h "$PART_DEV" | grep "Block size" | awk '{print $3}')
-          ACTUAL_SIZE=$((BLOCK_COUNT * BLOCK_SIZE))
-          echo "==> Actual filesystem size: $((ACTUAL_SIZE / 1024 / 1024)) MB"
-
-          # 卸载 loop 并裁剪镜像文件
           sudo losetup -d "$LOOP_DEV"
-          truncate -s "$ACTUAL_SIZE" "$IMAGE_FILE"
+          rm -rf "$MOUNT_POINT"
 
-          echo "==> Signing the image..."
+          echo "==> Signing image..."
           gpg --detach-sign --armor --local-user "$GPG_KEY_ID" -o "${IMAGE_FILE}.sig" "$IMAGE_FILE"
 
-          echo "✅ Final image created: $IMAGE_FILE"
+          echo "✅ Final F2FS image created:"
           ls -lh "$IMAGE_FILE"
 
-
-      - name: Upload final DD image artifact
+      - name: Upload final F2FS image
         uses: actions/upload-artifact@v4
         with:
-          name: final-image
+          name: final-f2fs-image
           path: |
-            out/fireflyos.img
-            out/fireflyos.img.sig
+            out/fireflyos-f2fs.img
+            out/fireflyos-f2fs.img.sig
           retention-days: 7
 
-  # ----------------------------------------------
-  # Job 3: Release (Runs on the Host Runner)
-  # ----------------------------------------------
+  # ------------------------------------------------------------
+  # Job 3: Release to GitHub
+  # ------------------------------------------------------------
   release:
     runs-on: ubuntu-latest
     needs: create-image
     permissions:
       contents: write
     steps:
-      - name: Checkout code (for git tagging)
+      - name: Checkout code (for tagging)
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Download final image artifact
+      - name: Download final F2FS image artifact
         uses: actions/download-artifact@v4
         with:
-          name: final-image
+          name: final-f2fs-image
           path: out/
-          
+
       - name: Compress image before upload
         run: |
-          xz -T0 -9 out/fireflyos.img
+          xz -T0 -9 out/fireflyos-f2fs.img
 
       - name: Calculate release date and tag name
         id: tag_info
         run: |
-          # 生成日期与唯一 Unix 时间戳
           RELEASE_DATE=$(date +'%Y-%m-%d')
           TIMESTAMP=$(date +%s)
           NEW_TAG="${RELEASE_DATE}-${TIMESTAMP}"
-
           echo "RELEASE_DATE=$RELEASE_DATE" >> $GITHUB_OUTPUT
           echo "NEW_TAG=$NEW_TAG" >> $GITHUB_OUTPUT
           echo "✅ Calculated tag: $NEW_TAG"
@@ -206,32 +193,30 @@ jobs:
           REMOTE_URL="https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
           git remote set-url origin "$REMOTE_URL"
 
-          # 检查是否已存在相同标签
           if git ls-remote --tags origin | grep -q "refs/tags/$NEW_TAG$"; then
-            echo "⚠️ Tag $NEW_TAG already exists. Skipping tag creation."
+            echo "⚠️ Tag $NEW_TAG already exists. Skipping."
             echo "tag_created=false" >> $GITHUB_OUTPUT
           else
-            echo "🏷️ Creating new tag: $NEW_TAG"
-            git tag -a "$NEW_TAG" -m "Monthly automated release for $RELEASE_DATE"
+            git tag -a "$NEW_TAG" -m "Monthly automated F2FS root image for $RELEASE_DATE"
             git push origin "$NEW_TAG"
-            echo "✅ Tag $NEW_TAG created and pushed successfully."
+            echo "✅ Tag $NEW_TAG created."
             echo "tag_created=true" >> $GITHUB_OUTPUT
           fi
 
-      - name: Create GitHub Release with Artifact
+      - name: Create GitHub Release
         if: steps.create_tag.outputs.tag_created == 'true'
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            out/fireflyos.img.xz
-            out/fireflyos.img.sig
+            out/fireflyos-f2fs.img.xz
+            out/fireflyos-f2fs.img.sig
           tag_name: ${{ steps.tag_info.outputs.NEW_TAG }}
           name: "${{ steps.tag_info.outputs.NEW_TAG }}"
           body: |
-            ## Automated Monthly RootFS Release
+            ## Automated F2FS Root Image Release
             **Release Date:** ${{ steps.tag_info.outputs.RELEASE_DATE }}
             **Tag:** `${{ steps.tag_info.outputs.NEW_TAG }}`
 
-            This release was automatically generated and published by the GitHub Actions workflow.
+            This image uses the **F2FS filesystem**, optimized for flash-based storage.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

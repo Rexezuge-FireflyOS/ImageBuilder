@@ -1,4 +1,4 @@
-name: Build Root Image (f2fs)
+name: Build Root Image
 
 on:
   schedule:
@@ -6,9 +6,9 @@ on:
   workflow_dispatch:
 
 jobs:
-  # ------------------------------------------------------------
-  # Job 1: Build RootFS Directory (inside Arch Container)
-  # ------------------------------------------------------------
+  # ----------------------------------------------
+  # Job 1: Build (Runs inside the Arch Container)
+  # ----------------------------------------------
   build:
     runs-on: ubuntu-latest
     container:
@@ -42,11 +42,11 @@ jobs:
           echo "NEW_TAG=$NEW_TAG" >> $GITHUB_OUTPUT
           echo "Calculated tag: $NEW_TAG"
 
-      - name: Archive rootfs directory to bypass upload restrictions
+      - name: Archive rootfs directory
         run: |
           tar -czf out/rootfs.tar.gz -C out/rootfs .
 
-      - name: Upload rootfs archive artifact
+      - name: Upload rootfs artifact
         uses: actions/upload-artifact@v4
         with:
           name: rootfs-archive
@@ -54,7 +54,7 @@ jobs:
           retention-days: 7
 
   # ----------------------------------------------
-  # Job 2: Create F2FS Image (Runs on the Host Runner)
+  # Job 2: Create System Image
   # ----------------------------------------------
   create-image:
     runs-on: ubuntu-latest
@@ -63,29 +63,29 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Download rootfs archive artifact
+      - name: Download rootfs artifact
         uses: actions/download-artifact@v4
         with:
           name: rootfs-archive
           path: out/
 
-      - name: Install F2FS image tools on Host
+      - name: Install image tools
         run: |
           sudo apt-get update
           sudo apt-get install -y parted f2fs-tools rsync
 
-      - name: Setup GPG on Host
+      - name: Setup GPG
         run: |
           echo "${{ secrets.GPG_PRIVATE_KEY }}" > /tmp/gpg.key
           gpg --batch --import /tmp/gpg.key
           rm -f /tmp/gpg.key
       
-      - name: Extract rootfs directory
+      - name: Extract rootfs
         run: |
           mkdir -p out/rootfs
           tar -xzf out/rootfs.tar.gz -C out/rootfs
 
-      - name: Create DD Image with F2FS filesystem
+      - name: Create system image
         env:
           ROOTFS_DIR: out/rootfs
           IMAGE_FILE: out/fireflyos.img
@@ -93,9 +93,6 @@ jobs:
           GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
         run: |
           set -euo pipefail
-
-          IMAGE_FILE="$IMAGE_FILE"
-          ROOTFS_DIR="$ROOTFS_DIR"
 
           echo "==> Rootfs size preview:"
           du -sh "$ROOTFS_DIR"
@@ -109,28 +106,24 @@ jobs:
 
           echo "==> Setting up loop device..."
           LOOP_DEV=$(sudo losetup -f --show -P "$IMAGE_FILE")
-          echo "-> 镜像已关联到 $LOOP_DEV"
+          echo "-> Image attached to $LOOP_DEV"
           sudo partprobe "$LOOP_DEV"
           sleep 2
           PART_DEV="${LOOP_DEV}p1"
 
-          echo "==> Formatting and embedding rootfs (F2FS)..."
+          echo "==> Creating F2FS filesystem and embedding rootfs..."
           sudo mkfs.f2fs -f -l ROOTFS -d "$ROOTFS_DIR" "$PART_DEV"
 
           echo "==> Cleaning up..."
           sudo losetup -d "$LOOP_DEV"
 
-          echo "==> Calculating actual image size..."
-          ACTUAL_SIZE=$(du -b "$IMAGE_FILE" | awk '{print $1}')
-          echo "Actual image size: $((ACTUAL_SIZE / 1024 / 1024)) MB"
-
-          echo "==> Signing the image..."
+          echo "==> Signing image..."
           gpg --detach-sign --armor --local-user "$GPG_KEY_ID" -o "${IMAGE_FILE}.sig" "$IMAGE_FILE"
 
-          echo "✅ Final image created: $IMAGE_FILE"
+          echo "✅ Final image created:"
           ls -lh "$IMAGE_FILE"
 
-      - name: Upload final DD image artifact
+      - name: Upload final image artifact
         uses: actions/upload-artifact@v4
         with:
           name: final-image
@@ -139,37 +132,37 @@ jobs:
             out/fireflyos.img.sig
           retention-days: 7
 
-
-  # ------------------------------------------------------------
-  # Job 3: Release to GitHub
-  # ------------------------------------------------------------
+  # ----------------------------------------------
+  # Job 3: Release
+  # ----------------------------------------------
   release:
     runs-on: ubuntu-latest
     needs: create-image
     permissions:
       contents: write
     steps:
-      - name: Checkout code (for tagging)
+      - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Download final F2FS image artifact
+      - name: Download final image artifact
         uses: actions/download-artifact@v4
         with:
-          name: final-f2fs-image
+          name: final-image
           path: out/
-
-      - name: Compress image before upload
+          
+      - name: Compress image
         run: |
-          xz -T0 -9 out/fireflyos-f2fs.img
+          xz -T0 -9 out/fireflyos.img
 
-      - name: Calculate release date and tag name
+      - name: Calculate release date and tag
         id: tag_info
         run: |
           RELEASE_DATE=$(date +'%Y-%m-%d')
           TIMESTAMP=$(date +%s)
           NEW_TAG="${RELEASE_DATE}-${TIMESTAMP}"
+
           echo "RELEASE_DATE=$RELEASE_DATE" >> $GITHUB_OUTPUT
           echo "NEW_TAG=$NEW_TAG" >> $GITHUB_OUTPUT
           echo "✅ Calculated tag: $NEW_TAG"
@@ -182,15 +175,15 @@ jobs:
         run: |
           git config user.name "GitHub Actions Bot"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
           REMOTE_URL="https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
           git remote set-url origin "$REMOTE_URL"
 
           if git ls-remote --tags origin | grep -q "refs/tags/$NEW_TAG$"; then
-            echo "⚠️ Tag $NEW_TAG already exists. Skipping."
+            echo "⚠️ Tag $NEW_TAG already exists. Skipping tag creation."
             echo "tag_created=false" >> $GITHUB_OUTPUT
           else
-            git tag -a "$NEW_TAG" -m "Monthly automated F2FS root image for $RELEASE_DATE"
+            echo "🏷️ Creating new tag: $NEW_TAG"
+            git tag -a "$NEW_TAG" -m "Automated release for $RELEASE_DATE"
             git push origin "$NEW_TAG"
             echo "✅ Tag $NEW_TAG created."
             echo "tag_created=true" >> $GITHUB_OUTPUT
@@ -201,15 +194,15 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            out/fireflyos-f2fs.img.xz
-            out/fireflyos-f2fs.img.sig
+            out/fireflyos.img.xz
+            out/fireflyos.img.sig
           tag_name: ${{ steps.tag_info.outputs.NEW_TAG }}
           name: "${{ steps.tag_info.outputs.NEW_TAG }}"
           body: |
-            ## Automated F2FS Root Image Release
+            ## Automated RootFS Release
             **Release Date:** ${{ steps.tag_info.outputs.RELEASE_DATE }}
             **Tag:** `${{ steps.tag_info.outputs.NEW_TAG }}`
 
-            This image uses the **F2FS filesystem**, optimized for flash-based storage.
+            This release was automatically generated and published by the GitHub Actions workflow.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

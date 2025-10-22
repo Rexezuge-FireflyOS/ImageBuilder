@@ -85,7 +85,7 @@ jobs:
           mkdir -p out/rootfs
           tar -xzf out/rootfs.tar.gz -C out/rootfs
 
-      - name: Create system image
+      - name: Create F2FS image
         env:
           ROOTFS_DIR: out/rootfs
           IMAGE_FILE: out/fireflyos.img
@@ -104,18 +104,28 @@ jobs:
           sudo parted -s "$IMAGE_FILE" mklabel msdos
           sudo parted -s "$IMAGE_FILE" mkpart primary f2fs 1MiB 100%
 
-          echo "==> Setting up loop device..."
+          echo "==> Attaching loop device..."
           LOOP_DEV=$(sudo losetup -f --show -P "$IMAGE_FILE")
           echo "-> Image attached to $LOOP_DEV"
           sudo partprobe "$LOOP_DEV"
           sleep 2
           PART_DEV="${LOOP_DEV}p1"
 
-          echo "==> Creating F2FS filesystem and embedding rootfs..."
-          sudo mkfs.f2fs -f -l ROOTFS -d "$ROOTFS_DIR" "$PART_DEV"
+          echo "==> Formatting partition as F2FS..."
+          sudo mkfs.f2fs -f -l ROOTFS "$PART_DEV"
 
-          echo "==> Cleaning up..."
+          echo "==> Mounting filesystem..."
+          MOUNT_POINT=$(mktemp -d)
+          sudo mount -t f2fs "$PART_DEV" "$MOUNT_POINT"
+
+          echo "==> Copying rootfs contents..."
+          sudo rsync -aHAX --delete "$ROOTFS_DIR/" "$MOUNT_POINT/"
+
+          echo "==> Syncing and unmounting..."
+          sync
+          sudo umount "$MOUNT_POINT"
           sudo losetup -d "$LOOP_DEV"
+          rm -rf "$MOUNT_POINT"
 
           echo "==> Signing image..."
           gpg --detach-sign --armor --local-user "$GPG_KEY_ID" -o "${IMAGE_FILE}.sig" "$IMAGE_FILE"

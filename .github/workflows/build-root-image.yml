@@ -127,19 +127,36 @@ jobs:
 
           echo "==> Shrinking filesystem (run e2fsck and resize2fs reliably)..."
           
-          # 强制检查并自动修复（非交互）
-          sudo e2fsck -f -y "$PART_DEV"
+          # 强制检查并自动修复（非交互），容忍退出码 1（表示修复完成）
+          sudo e2fsck -f -y "$PART_DEV" || {
+            code=$?
+            if [ "$code" -ne 1 ]; then
+              echo "e2fsck failed with code $code"
+              exit $code
+            fi
+          }
           
-          # 对修复后的文件系统再次缩小；如果 e2fsck 已经修改，
-          # resize2fs 可能改变文件系统结构，所以我们将重试一次以保证一致性。
+          # 对修复后的文件系统缩小
           sudo resize2fs -M "$PART_DEV" || {
             echo "resize2fs failed on first attempt — retrying after another e2fsck..."
-            sudo e2fsck -f -y "$PART_DEV"
+            sudo e2fsck -f -y "$PART_DEV" || {
+              code=$?
+              if [ "$code" -ne 1 ]; then
+                echo "e2fsck retry failed with code $code"
+                exit $code
+              fi
+            }
             sudo resize2fs -M "$PART_DEV"
           }
           
-          # 再次强制检查以确保文件系统稳定
-          sudo e2fsck -f -y "$PART_DEV"
+          # 再次检查稳定性
+          sudo e2fsck -f -y "$PART_DEV" || {
+            code=$?
+            if [ "$code" -ne 1 ]; then
+              echo "final e2fsck failed with code $code"
+              exit $code
+            fi
+          }
           
           # 计算实际大小（block count * block size）
           BLOCK_COUNT=$(sudo dumpe2fs -h "$PART_DEV" | awk '/Block count:/ {print $3}')

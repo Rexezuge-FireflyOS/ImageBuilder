@@ -1,4 +1,4 @@
-name: Build Root Image
+name: Build Root Image (EXT4 Only, No Partition Table)
 
 on:
   schedule:
@@ -42,8 +42,9 @@ jobs:
           echo "NEW_TAG=$NEW_TAG" >> $GITHUB_OUTPUT
           echo "Calculated tag: $NEW_TAG"
 
-      - name: Archive rootfs to bypass artifact size limits
+      - name: Archive rootfs
         run: |
+          mkdir -p out
           tar -czf out/rootfs.tar.gz -C out/rootfs .
 
       - name: Upload rootfs artifact
@@ -54,7 +55,7 @@ jobs:
           retention-days: 7
 
   # ----------------------------------------------
-  # Job 2: Create EXT4 Image
+  # Job 2: Create EXT4 Image (No Partition Table)
   # ----------------------------------------------
   create-image:
     runs-on: ubuntu-latest
@@ -72,7 +73,7 @@ jobs:
       - name: Install image creation tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y parted e2fsprogs rsync gpg
+          sudo apt-get install -y e2fsprogs rsync gpg
 
       - name: Setup GPG
         run: |
@@ -85,11 +86,11 @@ jobs:
           mkdir -p out/rootfs
           tar -xzf out/rootfs.tar.gz -C out/rootfs
 
-      - name: Create EXT4 image
+      - name: Create EXT4 image (No Partition Table)
         env:
           ROOTFS_DIR: out/rootfs
           IMAGE_FILE: out/fireflyos.img
-          IMAGE_SIZE_MB: 8192
+          BASE_SIZE_MB: 8192
           GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
         run: |
           set -euo pipefail
@@ -97,77 +98,49 @@ jobs:
           IMAGE_FILE="$IMAGE_FILE"
           MOUNT_POINT=$(mktemp -d)
 
-          echo "==> Creating image file..."
-          truncate -s "${IMAGE_SIZE_MB}M" "$IMAGE_FILE"
+          echo "==> Calculating required size..."
+          ROOTFS_SIZE_BYTES=$(du -sb "$ROOTFS_DIR" | awk '{print $1}')
+          ROOTFS_SIZE_MB=$(( (ROOTFS_SIZE_BYTES + 1024*1024 - 1) / (1024*1024) ))
+          SAFETY_MARGIN_MB=1024
+          TOTAL_SIZE_MB=$(( ROOTFS_SIZE_MB + SAFETY_MARGIN_MB ))
+          if [ "$TOTAL_SIZE_MB" -lt "$BASE_SIZE_MB" ]; then
+            TOTAL_SIZE_MB=$BASE_SIZE_MB
+          fi
+          echo "Total image size: ${TOTAL_SIZE_MB} MB"
 
-          echo "==> Partitioning image..."
-          sudo parted -s "$IMAGE_FILE" mklabel msdos
-          sudo parted -s "$IMAGE_FILE" mkpart primary ext4 1MiB 100%
+          echo "==> Creating blank image..."
+          truncate -s "${TOTAL_SIZE_MB}M" "$IMAGE_FILE"
 
-          echo "==> Setting up loop device..."
-          LOOP_DEV=$(sudo losetup -f --show -P "$IMAGE_FILE")
-          echo "-> Loop device: $LOOP_DEV"
-          sudo partprobe "$LOOP_DEV"
-          sleep 2
-          PART_DEV="${LOOP_DEV}p1"
+          echo "==> Formatting EXT4 filesystem..."
+          sudo mkfs.ext4 -F -L ROOTFS "$IMAGE_FILE"
+          sudo tune2fs -m 0 "$IMAGE_FILE"
 
-          echo "==> Formatting partition as ext4..."
-          sudo mkfs.ext4 -F -L ROOTFS "$PART_DEV"
-          sudo tune2fs -m 0 "$PART_DEV"
+          echo "==> Mounting EXT4 image..."
+          sudo mount -o loop "$IMAGE_FILE" "$MOUNT_POINT"
 
-          echo "==> Mounting filesystem..."
-          sudo mount -t ext4 "$PART_DEV" "$MOUNT_POINT"
-
-          echo "==> Copying rootfs..."
+          echo "==> Copying rootfs contents..."
           sudo rsync -aHAX --delete "$ROOTFS_DIR/" "$MOUNT_POINT/"
 
           echo "==> Sync and unmount..."
           sudo sync
           sudo umount "$MOUNT_POINT"
 
-          echo "==> Shrinking filesystem (run e2fsck and resize2fs reliably)..."
-          
-          # 强制检查并自动修复（非交互），容忍退出码 1（表示修复完成）
-          sudo e2fsck -f -y "$PART_DEV" || {
-            code=$?
-            if [ "$code" -ne 1 ]; then
-              echo "e2fsck failed with code $code"
-              exit $code
-            fi
-          }
-          
-          # 对修复后的文件系统缩小
-          sudo resize2fs -M "$PART_DEV" || {
-            echo "resize2fs failed on first attempt — retrying after another e2fsck..."
-            sudo e2fsck -f -y "$PART_DEV" || {
-              code=$?
-              if [ "$code" -ne 1 ]; then
-                echo "e2fsck retry failed with code $code"
-                exit $code
-              fi
-            }
-            sudo resize2fs -M "$PART_DEV"
-          }
-          
-          # 再次检查稳定性
-          sudo e2fsck -f -y "$PART_DEV" || {
-            code=$?
-            if [ "$code" -ne 1 ]; then
-              echo "final e2fsck failed with code $code"
-              exit $code
-            fi
-          }
-          
-          # 计算实际大小（block count * block size）
-          BLOCK_COUNT=$(sudo dumpe2fs -h "$PART_DEV" | awk '/Block count:/ {print $3}')
-          BLOCK_SIZE=$(sudo dumpe2fs -h "$PART_DEV" | awk '/Block size:/ {print $3}')
-          ACTUAL_SIZE=$((BLOCK_COUNT * BLOCK_SIZE))
-          echo "==> Actual filesystem size (bytes): $ACTUAL_SIZE"
-          echo "==> Actual filesystem size (MB): $((ACTUAL_SIZE / 1024 / 1024))"
-          
-          # 卸载 loop 设备后裁剪镜像文件
-          sudo losetup -d "$LOOP_DEV"
-          truncate -s "$ACTUAL_SIZE" "$IMAGE_FILE"
+          echo "==> Filesystem integrity check..."
+          sudo e2fsck -f -y "$IMAGE_FILE" || true
+
+          echo "==> Shrinking filesystem to minimal size..."
+          sudo resize2fs -M "$IMAGE_FILE"
+
+          echo "==> Final integrity check..."
+          sudo e2fsck -f -y "$IMAGE_FILE" || true
+
+          echo "==> Signing image..."
+          gpg --batch --yes --detach-sign --armor \
+              --local-user "$GPG_KEY_ID" \
+              -o "${IMAGE_FILE}.sig" "$IMAGE_FILE"
+
+          echo "✅ EXT4 root image created successfully."
+          ls -lh out/
 
       - name: Upload final image artifact
         uses: actions/upload-artifact@v4
@@ -241,12 +214,17 @@ jobs:
             out/fireflyos.img.xz
             out/fireflyos.img.sig
           tag_name: ${{ steps.tag_info.outputs.NEW_TAG }}
-          name: "${{ steps.tag_info.outputs.NEW_TAG }}"
+          name: "RootFS EXT4 Image - ${{ steps.tag_info.outputs.NEW_TAG }}"
           body: |
             ## Automated Monthly RootFS Release
             **Release Date:** ${{ steps.tag_info.outputs.RELEASE_DATE }}
             **Tag:** `${{ steps.tag_info.outputs.NEW_TAG }}`
 
-            This release was automatically generated and published by GitHub Actions.
+            This image is a pure EXT4 filesystem with no partition table (GPT/MBR removed).
+
+            ✅ Safe to write directly into a physical partition:
+            ```
+            sudo dd if=fireflyos.img of=/dev/sda2 bs=4M status=progress conv=fsync
+            ```
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

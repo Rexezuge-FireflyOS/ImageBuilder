@@ -125,23 +125,32 @@ jobs:
           sudo sync
           sudo umount "$MOUNT_POINT"
 
-          echo "==> Shrinking filesystem..."
+          echo "==> Shrinking filesystem (run e2fsck and resize2fs reliably)..."
+          
+          # 强制检查并自动修复（非交互）
           sudo e2fsck -f -y "$PART_DEV"
-          sudo resize2fs -M "$PART_DEV"
-
-          BLOCK_COUNT=$(sudo dumpe2fs -h "$PART_DEV" | grep "Block count" | awk '{print $3}')
-          BLOCK_SIZE=$(sudo dumpe2fs -h "$PART_DEV" | grep "Block size" | awk '{print $3}')
+          
+          # 对修复后的文件系统再次缩小；如果 e2fsck 已经修改，
+          # resize2fs 可能改变文件系统结构，所以我们将重试一次以保证一致性。
+          sudo resize2fs -M "$PART_DEV" || {
+            echo "resize2fs failed on first attempt — retrying after another e2fsck..."
+            sudo e2fsck -f -y "$PART_DEV"
+            sudo resize2fs -M "$PART_DEV"
+          }
+          
+          # 再次强制检查以确保文件系统稳定
+          sudo e2fsck -f -y "$PART_DEV"
+          
+          # 计算实际大小（block count * block size）
+          BLOCK_COUNT=$(sudo dumpe2fs -h "$PART_DEV" | awk '/Block count:/ {print $3}')
+          BLOCK_SIZE=$(sudo dumpe2fs -h "$PART_DEV" | awk '/Block size:/ {print $3}')
           ACTUAL_SIZE=$((BLOCK_COUNT * BLOCK_SIZE))
-          echo "Actual filesystem size: $((ACTUAL_SIZE / 1024 / 1024)) MB"
-
+          echo "==> Actual filesystem size (bytes): $ACTUAL_SIZE"
+          echo "==> Actual filesystem size (MB): $((ACTUAL_SIZE / 1024 / 1024))"
+          
+          # 卸载 loop 设备后裁剪镜像文件
           sudo losetup -d "$LOOP_DEV"
           truncate -s "$ACTUAL_SIZE" "$IMAGE_FILE"
-
-          echo "==> Signing image..."
-          gpg --detach-sign --armor --local-user "$GPG_KEY_ID" -o "${IMAGE_FILE}.sig" "$IMAGE_FILE"
-
-          echo "✅ Image build completed successfully."
-          ls -lh out/
 
       - name: Upload final image artifact
         uses: actions/upload-artifact@v4

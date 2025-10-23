@@ -13,6 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: archlinux:latest
+      options: --user root
     outputs:
       new_tag: ${{ steps.tag_info.outputs.NEW_TAG }}
       release_date: ${{ steps.tag_info.outputs.RELEASE_DATE }}

@@ -61,8 +61,19 @@ echo "-> $KEYRING_NAME 安装完成，GPG 密钥已导入到容器的 pacman 密
 # ==========================================================
 # 步骤 2: 创建 RootFS (不变)
 # ==========================================================
+EXCLUDE_PACKAGES=(
+  linux
+  linux-firmware
+  mkinitcpio
+  dracut
+  grub
+  efibootmgr
+  systemd-boot
+)
+FILTERED_PKG_LIST=$(grep -vE "^(linux|linux-firmware|mkinitcpio|dracut|grub|efibootmgr|systemd-boot)$" "$PKG_LIST_FILE")
+
 sudo mkdir -p "$ROOTFS_DIR/var/lib/pacman"
-sudo pacman --noconfirm --noprogressbar -r "$ROOTFS_DIR" --config "$PACMAN_CONF" -Sy $(cat "$PKG_LIST_FILE")
+sudo pacman --noconfirm --noprogressbar -r "$ROOTFS_DIR" --config "$PACMAN_CONF" -Sy $(cat "$FILTERED_PKG_LIST")
 
 # ==========================================================
 # 步骤 3: 配置目标系统 (不变)

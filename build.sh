@@ -74,7 +74,7 @@ NAME="FireflyOS"
 VERSION="$(date +%Y.%m)"
 ID=arch
 EOF
-echo "mystable" | sudo tee "$ROOTFS_DIR/etc/hostname"
+echo "FireflyOS" | sudo tee "$ROOTFS_DIR/etc/hostname"
 
 # ==========================================================
 # 步骤 4: 清理 (移除打包和签名)

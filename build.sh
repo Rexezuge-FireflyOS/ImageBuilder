@@ -64,7 +64,6 @@ echo "-> $KEYRING_NAME 安装完成，GPG 密钥已导入到容器的 pacman 密
 EXCLUDE_PACKAGES=(
   alhp-keyring
   linux
-  linux-firmware
   mkinitcpio
   dracut
   grub

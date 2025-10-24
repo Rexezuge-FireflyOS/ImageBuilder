@@ -71,10 +71,36 @@ EXCLUDE_PACKAGES=(
   efibootmgr
   systemd-boot
 )
-FILTERED_PKG_LIST=$(grep -vE "^(linux|linux-firmware|mkinitcpio|dracut|grub|efibootmgr|systemd-boot)$" "$PKG_LIST_FILE")
 
+# 创建临时文件（用于排除列表）
+tmp_exclude=$(mktemp)
+trap 'rm -f "$tmp_exclude"' EXIT
+
+# 将排除包写入临时文件（用于精确匹配）
+printf "%s\n" "${EXCLUDE_PACKAGES[@]}" > "$tmp_exclude"
+
+# 读取并预处理 PKG_LIST_FILE：
+#  - 去掉#注释（行中注释）及空行
+#  - 去除行首/尾空白
+#  - 从中删除精确匹配排除包（-F 精确字符串，-x 整行匹配）
+mapfile -t PACKAGES < <(
+  sed -e 's/#.*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' "$PKG_LIST_FILE" \
+    | grep -v -E '^$' \
+    | grep -v -F -x -f "$tmp_exclude"
+)
+
+# 如果没有要安装的包，直接退出（并提示）
+if [ "${#PACKAGES[@]}" -eq 0 ]; then
+  printf 'No packages to install after filtering. Exiting.\n' >&2
+  exit 0
+fi
+
+# 准备目标根文件系统（确保目录存在）
 sudo mkdir -p "$ROOTFS_DIR/var/lib/pacman"
-sudo pacman --noconfirm --noprogressbar -r "$ROOTFS_DIR" --config "$PACMAN_CONF" -Sy $(cat "$FILTERED_PKG_LIST")
+
+# 使用 pacman 在目标根下安装包
+# 注意：使用数组展开并加 -- 以避免包名以 - 开头时被解释为选项
+sudo pacman --noconfirm --noprogressbar -r "$ROOTFS_DIR" --config "$PACMAN_CONF" -Sy -- "${PACKAGES[@]}"
 
 # ==========================================================
 # 步骤 3: 配置目标系统 (不变)

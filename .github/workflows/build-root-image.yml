@@ -1,4 +1,4 @@
-name: Build Root Image (EXT4 Only, No Partition Table)
+name: Build Root Image
 
 on:
   schedule:

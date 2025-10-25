@@ -62,13 +62,13 @@ echo "-> $KEYRING_NAME 安装完成，GPG 密钥已导入到容器的 pacman 密
 # 步骤 2: 创建 RootFS (不变)
 # ==========================================================
 EXCLUDE_PACKAGES=(
-  alhp-keyring
-  linux
-  mkinitcpio
-  dracut
-  grub
-  efibootmgr
-  systemd-boot
+  # alhp-keyring
+  # linux
+  # mkinitcpio
+  # dracut
+  # grub
+  # efibootmgr
+  # systemd-boot
 )
 
 # 创建临时文件（用于排除列表）
